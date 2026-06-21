@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from build123d import *
 
 HERE = Path(__file__).parent
-van = import_svg(HERE / "door_profile.svg")[0]
+van = import_svg(HERE / "sources" / "door_profile.svg")[0]
 
 # Walk the edges in order from the hook tip (@0.0) to the bottom of the run.
 import math
