@@ -88,9 +88,12 @@ bracket_s     = boss_inset + bracket_tip_r      # mm  along G->H: top face flush
 # Top gusset (tension side): a buttress sweeping from the bracket up into the arc,
 # since the flush top has no edge to fillet. Tunable shape:
 gusset_reach  = bracket_base_fillet   # mm  reach OUT along the bracket = the bottom fillet radius
-gusset_rise   = 7.0        # mm  how far UP the arc (above G) the gusset blends to
+gusset_rise   = 8.0        # mm  how far UP the arc (above G) the gusset blends to (kept where the
+                           #     body's outer surface is still outside gusset_embed, so it tucks in)
 gusset_embed  = 1.0        # mm  wall-side sunk to this n (behind the contact face, inside the
                            #     back surface) so the union trims it flush to the curved outside
+gusset_concavity = 0.25    # 0..1  how far the outer edge bows toward the corner (concave fillet);
+                           #       >~0.3 bows so far it grazes the curved body and won't fuse
 
 
 def _ordered_edges(wire):
@@ -379,10 +382,14 @@ def add_top_gussets(part, wire):
     Pc = G + n * gusset_embed                       # sunk into the wall at s=0
     Pb = G + n * (back_wall + gusset_reach)         # out along the bracket top
     Pw = G - d * gusset_rise + n * gusset_embed     # sunk into the wall, up the arc above G
+    mid = (Pb + Pw) * 0.5
+    Marc = mid + (Pc - mid) * gusset_concavity      # bow the outer edge toward the corner
     for zc in z_centres:
-        tri = Polygon((Pc.X, Pc.Y), (Pb.X, Pb.Y), (Pw.X, Pw.Y))
-        part = part + extrude(tri, amount=bracket_thick).translate(
-            (0, 0, zc + bracket_thick / 2))   # extrude runs -Z, so offset +bt/2 to centre
+        prof = make_face([Line((Pc.X, Pc.Y), (Pb.X, Pb.Y)),
+                          ThreePointArc((Pb.X, Pb.Y), (Marc.X, Marc.Y), (Pw.X, Pw.Y)),
+                          Line((Pw.X, Pw.Y), (Pc.X, Pc.Y))])
+        part = (part + extrude(prof, amount=bracket_thick).translate(
+            (0, 0, zc - bracket_thick / 2))).clean()   # clean() merges the tangent sliver
     return part
 
 
