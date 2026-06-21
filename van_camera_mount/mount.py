@@ -23,7 +23,8 @@ OUTPUTS = HERE / "outputs"
 
 # ---- PARAMETERS (everything tunable lives here) ----
 wall          = 3.0        # mm  wall thickness, added to the NON-van side
-extrude_width = 50.0       # mm  mount width (Z); 3 = thin print-test slice, 50 = full
+extrude_width = 45.0       # mm  baseplate width (Z). DATUM = the RIGHT edge (max Z =
+                           #     the door edge); fit measurements run negative leftward.
 # (the offset side is auto-chosen so the wall lands OUTSIDE the curl regardless of
 #  wire winding — see _offset_outward; a hardcoded Side once silently filled the
 #  hook throat after a wire rebuild, so we pick it geometrically and assert.)
@@ -49,13 +50,23 @@ press_fit     = 0.1        # mm  pocket dia = magnet_dia - press_fit (interferen
 skin          = 0.8        # mm  van-side membrane over the magnet (~4 layers @0.2)
 back_wall     = skin + magnet_depth        # mm  G->H wall thickness (derived = 3.8)
 magnet_rows   = (11.0, 26.0)               # mm  positions along G->H, from G
-magnet_cols   = (9.0, 25.0, 41.0)          # mm  positions across width (Z)
+mag_edge      = (magnet_dia - press_fit) / 2 + 3.0   # 3 mm wall holding the outer magnets in
+magnet_cols   = (mag_edge, extrude_width / 2, extrude_width - mag_edge)  # derived: cinch to width
 
-# ---- MATERIAL REDUCTION ----
-# The hook's only job is to grip the door lip, so the hook + E->F sweep don't
-# need full width: keep two arms at the edges and cut the middle away (above F).
-arm_width     = 5.0        # mm  width of each hook arm left at the edges
+# ---- MATERIAL REDUCTION / HOOK ARMS ----
+# The hook only locates on the door lip, so it needn't be full width OR at the
+# plate edges: above F we keep just the hook bands listed here and cut the rest.
+# Each entry is (Z centre, width). DATUM = right edge (extrude_width); a fit offset
+# of -16 mm from the door edge => Z = extrude_width - 16.
+arm_width     = 5.0        # mm  default hook-arm width
 arm_fillet    = 1.5        # mm  fillet at each arm root (relieves the stress riser)
+# Trim the dead wedge of plate to the RIGHT of the right arm (door-edge side),
+# above the boss top, so the right arm's right face runs flush down to the boss.
+wedge_fillet  = 3.0        # mm  fillet on the inside corner of that L-cut
+hook_arms     = [(extrude_width - 16.0, arm_width),   # RIGHT hook: -16 mm off the door edge
+                 (arm_width / 2, arm_width)]           # LEFT hook: flush with the plate's left edge
+# Below the bottom magnet row the plate does nothing, so trim it off there.
+tail_keep     = magnet_dia / 2 + 2.0   # mm  plate kept below the bottom magnet row
 
 # ---- CAMERA MOUNT BRACKETS ----
 # Two arms projecting rearward off the boss/back face; the camera bolts between
@@ -185,29 +196,75 @@ def add_magnets(part, wire):
 
 
 def cut_arms(part, wire):
-    """Remove the middle of the hook + E->F sweep, leaving an arm at each edge.
+    """Above F, keep only the `hook_arms` bands; remove everything else.
 
-    Everything above F (the bend) loses its middle width; the lower FG arc + GH
-    plate region stays full width. Two `arm_width` hook arms remain at Z edges.
+    The lower FG arc + GH plate stays full width; above the F bend only the listed
+    hook arms survive, at whatever Z positions seat cleanly on the door lip.
     """
     sweep = max(_ordered_edges(wire), key=lambda e: e.length)   # the long E->F sweep
     cut_y = min(sweep.position_at(0).Y, sweep.position_at(1).Y)  # F = its lower end
     bb = part.bounding_box()
-    box = Box(bb.size.X + 2, (bb.max.Y + 1) - cut_y, extrude_width - 2 * arm_width)
-    centre = ((bb.min.X + bb.max.X) / 2, (cut_y + bb.max.Y + 1) / 2, extrude_width / 2)
-    part = part - Pos(*centre) * box
+    cx = (bb.min.X + bb.max.X) / 2
+    cy = (cut_y + bb.max.Y + 1) / 2
+    dx, dy = bb.size.X + 2, (bb.max.Y + 1) - cut_y
+    above = Pos(cx, cy, extrude_width / 2) * Box(dx, dy, extrude_width + 4)
+    bands = None
+    for zc, w in hook_arms:
+        band = Pos(cx, cy, zc) * Box(dx, dy, w)
+        bands = band if bands is None else bands + band
+    part = part - (above - bands)                # remove above-F material outside the bands
 
-    # Fillet the re-entrant edge at each arm root (Y=cut_y, Z at the arm boundary).
+    # Fillet each hook-arm root edge (Y=cut_y, at the band's two Z boundaries).
     if arm_fillet > 0:
+        edges_z = [zc + sign * w / 2 for zc, w in hook_arms for sign in (-1, 1)]
         def midz(e):
             return (e.position_at(0).Z + e.position_at(1).Z) / 2
         roots = [e for e in part.edges()
                  if abs(e.position_at(0).Y - cut_y) < 0.25
                  and abs(e.position_at(1).Y - cut_y) < 0.25
-                 and (abs(midz(e) - arm_width) < 0.25
-                      or abs(midz(e) - (extrude_width - arm_width)) < 0.25)]
-        if roots:
-            part = fillet(roots, radius=arm_fillet)
+                 and any(abs(midz(e) - z) < 0.25 for z in edges_z)]
+        for r in (arm_fillet, 1.0, 0.6, 0.3):       # back off if the local faces are tight
+            if not roots:
+                break
+            try:
+                part = fillet(roots, radius=r)
+                break
+            except Exception:
+                continue
+    return part
+
+
+def cut_right_wedge(part, wire):
+    """L-cut the dead plate to the right of the right arm, above the boss top.
+
+    Flush down the right arm's right face to the boss top, then in along the boss
+    top to the door edge; the inside corner is filleted. The magnet plate below
+    the boss top stays full width (keeps the right magnet column).
+    """
+    leg = _ordered_edges(wire)[-1]
+    G, H = leg.position_at(0), leg.position_at(1)
+    d = H - G
+    d = d / d.length
+    right_z = max(zc + w / 2 for zc, w in hook_arms)    # right face of the rightmost arm
+    boss_top_y = G.Y + d.Y * 3.0                         # boss top (inset matches add_magnets)
+    bb = part.bounding_box()
+    z0, z1 = right_z, bb.max.Z + 1
+    y0, y1 = boss_top_y, bb.max.Y + 1
+    part = part - Pos((bb.min.X + bb.max.X) / 2, (y0 + y1) / 2, (z0 + z1) / 2) * Box(
+        bb.size.X + 2, y1 - y0, z1 - z0)
+
+    if wedge_fillet > 0:                                 # round the inside corner of the L
+        corner = [e for e in part.edges()
+                  if abs((e.position_at(0).Z + e.position_at(1).Z) / 2 - right_z) < 0.3
+                  and abs((e.position_at(0).Y + e.position_at(1).Y) / 2 - boss_top_y) < 0.3]
+        for r in (wedge_fillet, 2.0, 1.0, 0.5):
+            if not corner:
+                break
+            try:
+                part = fillet(corner, radius=r)
+                break
+            except Exception:
+                continue
     return part
 
 
@@ -270,11 +327,26 @@ def add_brackets(part, wire):
     return part
 
 
+def cut_tail(part, wire):
+    """Trim the plate off just below the bottom magnet row (dead material)."""
+    leg = _ordered_edges(wire)[-1]
+    G, H = leg.position_at(0), leg.position_at(1)
+    d = H - G
+    d = d / d.length
+    s_cut = max(magnet_rows) + tail_keep
+    centre = G + d * (s_cut + 20)                    # box reaches H-ward from the cut
+    plane = Plane(origin=Vector(centre.X, centre.Y, extrude_width / 2),
+                  x_dir=d, z_dir=(0, 0, 1))
+    return part - plane * Box(40, 60, extrude_width + 4)
+
+
 van = build_contact_wire()
 section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 mount = add_magnets(mount, van)
 mount = cut_arms(mount, van)
+mount = cut_tail(mount, van)
+mount = cut_right_wedge(mount, van)
 mount = add_brackets(mount, van)
 
 if __name__ == "__main__":
