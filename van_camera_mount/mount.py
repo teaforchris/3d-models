@@ -83,7 +83,14 @@ bolt_clear    = 20.0       # mm  M2 hole centre distance from the boss back face
 m2_clear_dia  = 2.4        # mm  M2 bolt clearance hole
 hole_wall     = 2.0        # mm  material around the hole (sets tip radius & arm width)
 bracket_base_fillet = 6.0  # mm  exaggerated base fillet, in the XY (profile) plane only
-bracket_s     = sum(magnet_rows) / 2   # mm  along G->H; centred on the magnet group (moves with it)
+bracket_tip_r = m2_clear_dia / 2 + hole_wall    # tongue tip radius (2 mm wall around the hole)
+bracket_s     = boss_inset + bracket_tip_r      # mm  along G->H: top face flush with the boss top (G)
+# Top gusset (tension side): a buttress sweeping from the bracket up into the arc,
+# since the flush top has no edge to fillet. Tunable shape:
+gusset_reach  = bracket_base_fillet   # mm  reach OUT along the bracket = the bottom fillet radius
+gusset_rise   = 7.0        # mm  how far UP the arc (above G) the gusset blends to
+gusset_embed  = 1.0        # mm  wall-side sunk to this n (behind the contact face, inside the
+                           #     back surface) so the union trims it flush to the curved outside
 
 
 def _ordered_edges(wire):
@@ -265,7 +272,8 @@ def cut_right_wedge(part, wire):
         def s_of(p):
             return (Vector(p.X, p.Y, 0) - Vector(G.X, G.Y, 0)).dot(d)
         corner = [e for e in part.edges()
-                  if abs((e.position_at(0).Z + e.position_at(1).Z) / 2 - right_z) < 0.3
+                  if e.geom_type == GeomType.LINE and e.length > 1.5
+                  and abs((e.position_at(0).Z + e.position_at(1).Z) / 2 - right_z) < 0.3
                   and abs(s_of((e.position_at(0) + e.position_at(1)) * 0.5) - boss_top_s) < 0.5]
         for r in (wedge_fillet, 2.0, 1.0, 0.5):
             if not corner:
@@ -301,11 +309,14 @@ def add_brackets(part, wire):
     s = bracket_s if bracket_s is not None else Lgh / 2
     base = G + d * s                                 # attach point on the back face
 
-    tip_r = m2_clear_dia / 2 + hole_wall             # 2 mm of material around the hole
+    tip_r = bracket_tip_r                            # 2 mm of material around the hole
     hole_n = back_wall + bolt_clear                  # hole centre, 20 mm off the boss
     root_n = wall - 1.0                              # embed into the wall so it fuses
-    z_centres = (extrude_width / 2 - (bracket_gap + bracket_thick) / 2,
-                 extrude_width / 2 + (bracket_gap + bracket_thick) / 2)
+    # Anchor the pair so the right bracket's outer face is flush with the right
+    # arm's right edge (no overhang past the mount edge), camera centreline follows.
+    right_edge = max(zc + w / 2 for zc, w in hook_arms)
+    z_right = right_edge - bracket_thick / 2
+    z_centres = (z_right - (bracket_gap + bracket_thick), z_right)
     for zc in z_centres:
         part = part + _bracket_arm(base, d, n, zc, hole_n, tip_r, root_n)
 
@@ -350,6 +361,31 @@ def cut_tail(part, wire):
     return part - plane * Box(40, 60, extrude_width + 4)
 
 
+def add_top_gussets(part, wire):
+    """Buttress on the tension (top) side of each bracket, sweeping into the arc.
+
+    The bracket top is flush with the boss top (no edge to fillet), so we add an
+    explicit gusset: a triangle in the bending (XY) plane from the bracket, up the
+    arc wall above G, spanning the bracket thickness.
+    """
+    leg = _ordered_edges(wire)[-1]
+    G, H = leg.position_at(0), leg.position_at(1)
+    d = H - G
+    d = d / d.length
+    n = Vector(d.Y, -d.X, 0)
+    right_edge = max(zc + w / 2 for zc, w in hook_arms)
+    z_right = right_edge - bracket_thick / 2
+    z_centres = (z_right - (bracket_gap + bracket_thick), z_right)
+    Pc = G + n * gusset_embed                       # sunk into the wall at s=0
+    Pb = G + n * (back_wall + gusset_reach)         # out along the bracket top
+    Pw = G - d * gusset_rise + n * gusset_embed     # sunk into the wall, up the arc above G
+    for zc in z_centres:
+        tri = Polygon((Pc.X, Pc.Y), (Pb.X, Pb.Y), (Pw.X, Pw.Y))
+        part = part + extrude(tri, amount=bracket_thick).translate(
+            (0, 0, zc + bracket_thick / 2))   # extrude runs -Z, so offset +bt/2 to centre
+    return part
+
+
 van = build_contact_wire()
 section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
@@ -358,6 +394,7 @@ mount = cut_arms(mount, van)
 mount = cut_tail(mount, van)
 mount = cut_right_wedge(mount, van)
 mount = add_brackets(mount, van)
+mount = add_top_gussets(mount, van)
 
 if __name__ == "__main__":
     bb = mount.bounding_box()
