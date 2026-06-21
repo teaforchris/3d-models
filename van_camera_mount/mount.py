@@ -49,7 +49,7 @@ magnet_depth  = 3.0        # mm  magnet thickness; pocket depth = this (flush at
 press_fit     = 0.1        # mm  pocket dia = magnet_dia - press_fit (interference)
 skin          = 0.8        # mm  van-side membrane over the magnet (~4 layers @0.2)
 back_wall     = skin + magnet_depth        # mm  G->H wall thickness (derived = 3.8)
-boss_inset    = 3.0        # mm  boss starts this far down-leg from G (= its top edge)
+boss_inset    = 0.0        # mm  boss top at G (as high as the leg goes before the curve)
 magnet_top_gap = 3.0       # mm  boss top edge -> top of the top magnet hole
 pocket_radius = (magnet_dia - press_fit) / 2
 row_spacing   = 15.0       # mm  spacing between the two magnet rows
