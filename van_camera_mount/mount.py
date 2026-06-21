@@ -51,6 +51,12 @@ back_wall     = skin + magnet_depth        # mm  G->H wall thickness (derived = 
 magnet_rows   = (11.0, 26.0)               # mm  positions along G->H, from G
 magnet_cols   = (9.0, 25.0, 41.0)          # mm  positions across width (Z)
 
+# ---- MATERIAL REDUCTION ----
+# The hook's only job is to grip the door lip, so the hook + E->F sweep don't
+# need full width: keep two arms at the edges and cut the middle away (above F).
+arm_width     = 5.0        # mm  width of each hook arm left at the edges
+arm_fillet    = 1.5        # mm  fillet at each arm root (relieves the stress riser)
+
 
 def _ordered_edges(wire):
     """Edges of `wire` oriented and ordered along the walk from position_at(0)."""
@@ -166,10 +172,38 @@ def add_magnets(part, wire):
     return part
 
 
+def cut_arms(part, wire):
+    """Remove the middle of the hook + E->F sweep, leaving an arm at each edge.
+
+    Everything above F (the bend) loses its middle width; the lower FG arc + GH
+    plate region stays full width. Two `arm_width` hook arms remain at Z edges.
+    """
+    sweep = max(_ordered_edges(wire), key=lambda e: e.length)   # the long E->F sweep
+    cut_y = min(sweep.position_at(0).Y, sweep.position_at(1).Y)  # F = its lower end
+    bb = part.bounding_box()
+    box = Box(bb.size.X + 2, (bb.max.Y + 1) - cut_y, extrude_width - 2 * arm_width)
+    centre = ((bb.min.X + bb.max.X) / 2, (cut_y + bb.max.Y + 1) / 2, extrude_width / 2)
+    part = part - Pos(*centre) * box
+
+    # Fillet the re-entrant edge at each arm root (Y=cut_y, Z at the arm boundary).
+    if arm_fillet > 0:
+        def midz(e):
+            return (e.position_at(0).Z + e.position_at(1).Z) / 2
+        roots = [e for e in part.edges()
+                 if abs(e.position_at(0).Y - cut_y) < 0.25
+                 and abs(e.position_at(1).Y - cut_y) < 0.25
+                 and (abs(midz(e) - arm_width) < 0.25
+                      or abs(midz(e) - (extrude_width - arm_width)) < 0.25)]
+        if roots:
+            part = fillet(roots, radius=arm_fillet)
+    return part
+
+
 van = build_contact_wire()
 section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 mount = add_magnets(mount, van)
+mount = cut_arms(mount, van)
 
 if __name__ == "__main__":
     bb = mount.bounding_box()
