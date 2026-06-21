@@ -270,23 +270,37 @@ def cut_right_wedge(part, wire):
     base = G + d * (boss_top_s - 80 / 2)                 # box sits on the -d (toward F) side
     plane = Plane(origin=Vector(base.X, base.Y, cz), x_dir=d, z_dir=(0, 0, 1))
     part = part - plane * Box(80, 120, (bb.max.Z + 1) - right_z)
-
-    if wedge_fillet > 0:                                 # round the inside corner of the L
-        def s_of(p):
-            return (Vector(p.X, p.Y, 0) - Vector(G.X, G.Y, 0)).dot(d)
-        corner = [e for e in part.edges()
-                  if e.geom_type == GeomType.LINE and e.length > 1.5
-                  and abs((e.position_at(0).Z + e.position_at(1).Z) / 2 - right_z) < 0.3
-                  and abs(s_of((e.position_at(0) + e.position_at(1)) * 0.5) - boss_top_s) < 0.5]
-        for r in (wedge_fillet, 2.0, 1.0, 0.5):
-            if not corner:
-                break
-            try:
-                part = fillet(corner, radius=r)
-                break
-            except Exception:
-                continue
     return part
+
+
+def add_wedge_fillet(part, wire):
+    """Explicit fillet in the L-cut's re-entrant corner (OCC won't fillet it at G).
+
+    The corner is at (Z = right arm edge, s = boss top), running across the wall.
+    We union a quarter-round (box minus cylinder) that rounds the sharp inside
+    corner for strength, overlapping the adjacent faces so it fuses cleanly.
+    """
+    if wedge_fillet <= 0:
+        return part
+    leg = _ordered_edges(wire)[-1]
+    G, H = leg.position_at(0), leg.position_at(1)
+    d = H - G
+    d = d / d.length
+    n = Vector(d.Y, -d.X, 0)
+    R = wedge_fillet
+    right_z = max(zc + w / 2 for zc, w in hook_arms)
+    s0 = boss_inset                                     # boss top along the leg
+    ov = 0.5                                            # overlap into the adjacent faces
+
+    # Box over the notch corner (s in [s0-R, s0+ov], Z in [right_z-ov, right_z+R]),
+    # spanning the wall thickness in n; minus a cylinder to leave the concave round.
+    bc = G + d * (s0 + (-R + ov) / 2) + n * (back_wall / 2)
+    box = Plane(origin=Vector(bc.X, bc.Y, right_z + (R - ov) / 2),
+                x_dir=d, z_dir=(0, 0, 1)) * Box(R + ov, back_wall, R + ov)
+    cc = G + d * (s0 - R) + n * (back_wall / 2)
+    cyl = Plane(origin=Vector(cc.X, cc.Y, right_z + R), z_dir=n) * Cylinder(
+        radius=R, height=back_wall + 2)
+    return (part + (box - cyl)).clean()
 
 
 def _bracket_arm(base, d, n, zc, hole_n, tip_r, root_n):
@@ -340,8 +354,14 @@ def add_brackets(part, wire):
                 abs(m.Z - zc) < bracket_thick / 2 + 0.3 for zc in z_centres)
             if along_z and near_boss and near_arm:
                 roots.append(e)
-        if roots:
-            part = fillet(roots, bracket_base_fillet)
+        for r in (bracket_base_fillet, 4.0, 3.0, 2.0):
+            if not roots:
+                break
+            try:
+                part = fillet(roots, r)
+                break
+            except Exception:
+                continue
 
     # M2 clearance hole through both arms (axis along Z), 20 mm off the boss face.
     hc = base + n * hole_n
@@ -402,6 +422,7 @@ mount = cut_tail(mount, van)
 mount = cut_right_wedge(mount, van)
 mount = add_brackets(mount, van)
 mount = add_top_gussets(mount, van)
+mount = add_wedge_fillet(mount, van)   # last: union near the right bracket, don't perturb its fillet
 
 if __name__ == "__main__":
     bb = mount.bounding_box()
