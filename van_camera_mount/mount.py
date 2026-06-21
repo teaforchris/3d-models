@@ -210,6 +210,47 @@ def add_magnets(part, wire):
     return part
 
 
+def add_outer_taper(part, wire):
+    """Reshape the F->G outer surface so it flows flush into the boss (no shelf).
+
+    Instead of a constant 3 mm offset that leaves a step where it meets the 3.8 mm
+    boss, the wall thickness grows from `wall` at F to `back_wall` at G. Built as a
+    tapered shell over the arc only (the validated offset elsewhere is untouched);
+    the outer face follows the van offset, so it's a smooth new arc, not a blade.
+    """
+    edges = _ordered_edges(wire)
+    sweep_i = max(range(len(edges)), key=lambda i: edges[i].length)
+    leg_i = len(edges) - 1
+    fg = list(range(sweep_i + 1, leg_i))
+    fg_total = sum(edges[i].length for i in fg)
+    lo = wall - 0.4                                 # inner sunk into the wall to fuse
+    inner, outer, acc = [], [], 0.0
+    for ei in fg:
+        e = edges[ei]
+        for j in range(19):
+            u = j / 18
+            p = e.position_at(u)
+            tg = e.tangent_at(u)
+            rn = Vector(tg.Y, -tg.X, 0)             # outward (right) normal
+            t = wall + (back_wall - wall) * ((acc + u * e.length) / fg_total)
+            inner.append(p + rn * lo)
+            outer.append(p + rn * t)
+        acc += e.length
+
+    def dedup(seq):
+        out = [seq[0]]
+        for q in seq[1:]:
+            if (q - out[-1]).length > 1e-4:
+                out.append(q)
+        return out
+
+    inner, outer = dedup(inner), dedup(outer)
+    face = make_face([Spline(*inner), Line(inner[-1], outer[-1]),
+                      Spline(*outer), Line(outer[0], inner[0])])
+    shell = extrude(face, amount=extrude_width)
+    return (part + shell.translate((0, 0, -shell.bounding_box().min.Z))).clean()
+
+
 def cut_arms(part, wire):
     """Above F, keep only the `hook_arms` bands; remove everything else.
 
@@ -350,7 +391,9 @@ def add_brackets(part, wire):
             along_z = abs(t.Z) / (t.length or 1) > 0.9
             m = (e.position_at(0) + e.position_at(1)) * 0.5
             near_boss = abs(ncoord(m) - back_wall) < 0.7
-            near_arm = abs(dcoord(m) - s) < tip_r + 0.5 and any(
+            # bottom edge only (dcoord > s); the top is at the boss/taper junction
+            # and filleting it together with the bottom fails at every radius.
+            near_arm = dcoord(m) > s and abs(dcoord(m) - s) < tip_r + 0.5 and any(
                 abs(m.Z - zc) < bracket_thick / 2 + 0.3 for zc in z_centres)
             if along_z and near_boss and near_arm:
                 roots.append(e)
@@ -417,6 +460,7 @@ van = build_contact_wire()
 section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 mount = add_magnets(mount, van)
+mount = add_outer_taper(mount, van)
 mount = cut_arms(mount, van)
 mount = cut_tail(mount, van)
 mount = cut_right_wedge(mount, van)
