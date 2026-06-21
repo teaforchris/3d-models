@@ -57,6 +57,18 @@ magnet_cols   = (9.0, 25.0, 41.0)          # mm  positions across width (Z)
 arm_width     = 5.0        # mm  width of each hook arm left at the edges
 arm_fillet    = 1.5        # mm  fillet at each arm root (relieves the stress riser)
 
+# ---- CAMERA MOUNT BRACKETS ----
+# Two arms projecting rearward off the boss/back face; the camera bolts between
+# them with an M2 bolt (axis along the width). Spec: 13 mm inner gap, 3 mm thick
+# arms, hole centres 20 mm clear of the boss back face.
+bracket_gap   = 13.0       # mm  inner distance between the two arms (camera width)
+bracket_thick = 3.0        # mm  arm thickness (along width Z)
+bolt_clear    = 20.0       # mm  M2 hole centre distance from the boss back face
+m2_clear_dia  = 2.4        # mm  M2 bolt clearance hole
+hole_wall     = 2.0        # mm  material around the hole (sets tip radius & arm width)
+bracket_base_fillet = 6.0  # mm  exaggerated base fillet, in the XY (profile) plane only
+bracket_s     = None       # mm  position along G->H from G; None = mid-boss
+
 
 def _ordered_edges(wire):
     """Edges of `wire` oriented and ordered along the walk from position_at(0)."""
@@ -199,11 +211,71 @@ def cut_arms(part, wire):
     return part
 
 
+def _bracket_arm(base, d, n, zc, hole_n, tip_r, root_n):
+    """One rounded-tongue arm at width-position zc, before fusing to the body."""
+    # Shaft (root -> hole centre) + semicircular tip cap concentric with the hole.
+    shaft_c = base + n * ((root_n + hole_n) / 2)
+    shaft_pl = Plane(origin=Vector(shaft_c.X, shaft_c.Y, zc), x_dir=n, z_dir=(0, 0, 1))
+    shaft = shaft_pl * Box(hole_n - root_n, 2 * tip_r, bracket_thick)
+    tip_c = base + n * hole_n
+    tip = Plane(origin=Vector(tip_c.X, tip_c.Y, zc), z_dir=(0, 0, 1)) * Cylinder(
+        radius=tip_r, height=bracket_thick)
+    return shaft + tip                              # straight sides, curved (tongue) top
+
+
+def add_brackets(part, wire):
+    """Two rounded-tongue arms with M2 holes — the camera bolts between them."""
+    leg = _ordered_edges(wire)[-1]
+    G, H = leg.position_at(0), leg.position_at(1)
+    d = H - G
+    Lgh = d.length
+    d = d / Lgh
+    n = Vector(d.Y, -d.X, 0)                         # outward (rearward) normal
+    s = bracket_s if bracket_s is not None else Lgh / 2
+    base = G + d * s                                 # attach point on the back face
+
+    tip_r = m2_clear_dia / 2 + hole_wall             # 2 mm of material around the hole
+    hole_n = back_wall + bolt_clear                  # hole centre, 20 mm off the boss
+    root_n = wall - 1.0                              # embed into the wall so it fuses
+    z_centres = (extrude_width / 2 - (bracket_gap + bracket_thick) / 2,
+                 extrude_width / 2 + (bracket_gap + bracket_thick) / 2)
+    for zc in z_centres:
+        part = part + _bracket_arm(base, d, n, zc, hole_n, tip_r, root_n)
+
+    # Exaggerated base fillet, in the XY (profile) plane only: the root edges that
+    # run along Z (the arm's two sides), where the arm sides meet the boss face.
+    if bracket_base_fillet > 0:
+        def ncoord(p):
+            return (Vector(p.X, p.Y, 0) - Vector(G.X, G.Y, 0)).dot(n)
+        def dcoord(p):
+            return (Vector(p.X, p.Y, 0) - Vector(G.X, G.Y, 0)).dot(d)
+        roots = []
+        for e in part.edges():
+            t = e.position_at(1) - e.position_at(0)
+            along_z = abs(t.Z) / (t.length or 1) > 0.9
+            m = (e.position_at(0) + e.position_at(1)) * 0.5
+            near_boss = abs(ncoord(m) - back_wall) < 0.7
+            near_arm = abs(dcoord(m) - s) < tip_r + 0.5 and any(
+                abs(m.Z - zc) < bracket_thick / 2 + 0.3 for zc in z_centres)
+            if along_z and near_boss and near_arm:
+                roots.append(e)
+        if roots:
+            part = fillet(roots, bracket_base_fillet)
+
+    # M2 clearance hole through both arms (axis along Z), 20 mm off the boss face.
+    hc = base + n * hole_n
+    hc = Vector(hc.X, hc.Y, extrude_width / 2)
+    part = part - Plane(origin=hc, z_dir=(0, 0, 1)) * Cylinder(
+        radius=m2_clear_dia / 2, height=extrude_width + 2)
+    return part
+
+
 van = build_contact_wire()
 section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 mount = add_magnets(mount, van)
 mount = cut_arms(mount, van)
+mount = add_brackets(mount, van)
 
 if __name__ == "__main__":
     bb = mount.bounding_box()
