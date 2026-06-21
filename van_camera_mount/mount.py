@@ -23,7 +23,7 @@ OUTPUTS = HERE / "outputs"
 
 # ---- PARAMETERS (everything tunable lives here) ----
 wall          = 3.0        # mm  wall thickness, added to the NON-van side
-extrude_width = 3.0        # mm  mount width (Z); 3 = thin print-test slice, 50 = full
+extrude_width = 50.0       # mm  mount width (Z); 3 = thin print-test slice, 50 = full
 # (the offset side is auto-chosen so the wall lands OUTSIDE the curl regardless of
 #  wire winding — see _offset_outward; a hardcoded Side once silently filled the
 #  hook throat after a wire rebuild, so we pick it geometrically and assert.)
@@ -37,6 +37,19 @@ extrude_width = 3.0        # mm  mount width (Z); 3 = thin print-test slice, 50 
 #              van. +ve moves H toward the door. ~0.35 mm of arc ~= ~1 mm at H.
 ef_extend     = 0.5        # mm  LOCKED
 fg_extend     = 0.35       # mm  LOCKED
+
+# ---- MAGNETS (recessed from the BACK; van-side skin stays one continuous surface) ----
+# Pockets open on the outside/back and are blind toward the van, leaving a thin
+# skin so the contact face never breaks (no steel/paint contamination). The G->H
+# wall is locally thickened to back_wall to host them. Magnet nominal 6x3 mm;
+# refine magnet_dia/press_fit once measured with calipers.
+magnet_dia    = 6.0        # mm  magnet diameter (nominal)
+magnet_depth  = 3.0        # mm  magnet thickness; pocket depth = this (flush at back)
+press_fit     = 0.1        # mm  pocket dia = magnet_dia - press_fit (interference)
+skin          = 0.8        # mm  van-side membrane over the magnet (~4 layers @0.2)
+back_wall     = skin + magnet_depth        # mm  G->H wall thickness (derived = 3.8)
+magnet_rows   = (11.0, 26.0)               # mm  positions along G->H, from G
+magnet_cols   = (9.0, 25.0, 41.0)          # mm  positions across width (Z)
 
 
 def _ordered_edges(wire):
@@ -118,9 +131,45 @@ def _offset_outward(wire, wall):
     return outward
 
 
+def add_magnets(part, wire):
+    """Thicken the G->H wall to back_wall and recess the magnet pockets.
+
+    Pockets open on the back (outside) and stop `skin` short of the van face, so
+    the contact surface stays one continuous skin of plastic. The boss adds the
+    extra wall on the outside only — the validated van face is untouched.
+    """
+    leg = _ordered_edges(wire)[-1]                 # the G->H back-face leg
+    G, H = leg.position_at(0), leg.position_at(1)
+    d = H - G
+    Lgh = d.length
+    d = d / Lgh
+    n = Vector(d.Y, -d.X, 0)                        # outward normal (into plastic/back)
+
+    # Boss: raise the G->H wall from `wall` to `back_wall`, full width, ends inset.
+    inset = 3.0
+    lo = wall - 0.4                                 # overlap into existing wall to fuse cleanly
+    centre = G + d * (Lgh / 2) + n * ((lo + back_wall) / 2)
+    centre = Vector(centre.X, centre.Y, extrude_width / 2)
+    plane = Plane(origin=centre, x_dir=d, z_dir=(0, 0, 1))
+    part = part + plane * Box(Lgh - 2 * inset, back_wall - lo, extrude_width)
+
+    # Pockets: cylinders drilled from the back toward the van, floor at `skin`.
+    over = 0.6                                      # break cleanly through the back face
+    pcd = skin + (magnet_depth + over) / 2          # pocket centre dist from van face
+    r = (magnet_dia - press_fit) / 2
+    for s in magnet_rows:
+        for z in magnet_cols:
+            c = G + d * s + n * pcd
+            c = Vector(c.X, c.Y, z)
+            part = part - Plane(origin=c, z_dir=n) * Cylinder(radius=r,
+                                                              height=magnet_depth + over)
+    return part
+
+
 van = build_contact_wire()
 section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
+mount = add_magnets(mount, van)
 
 if __name__ == "__main__":
     bb = mount.bounding_box()
