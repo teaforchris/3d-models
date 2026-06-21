@@ -246,17 +246,22 @@ def cut_right_wedge(part, wire):
     d = H - G
     d = d / d.length
     right_z = max(zc + w / 2 for zc, w in hook_arms)    # right face of the rightmost arm
-    boss_top_y = G.Y + d.Y * 3.0                         # boss top (inset matches add_magnets)
+    boss_top_s = 3.0                                     # boss top along the leg (matches add_magnets inset)
+
+    # Wedge = {Z > right arm's right face} AND {above the boss top, measured ALONG
+    # the leg} — so the "inward" cut follows the slanted boss-top edge (no triangle).
     bb = part.bounding_box()
-    z0, z1 = right_z, bb.max.Z + 1
-    y0, y1 = boss_top_y, bb.max.Y + 1
-    part = part - Pos((bb.min.X + bb.max.X) / 2, (y0 + y1) / 2, (z0 + z1) / 2) * Box(
-        bb.size.X + 2, y1 - y0, z1 - z0)
+    cz = (right_z + bb.max.Z + 1) / 2
+    base = G + d * (boss_top_s - 80 / 2)                 # box sits on the -d (toward F) side
+    plane = Plane(origin=Vector(base.X, base.Y, cz), x_dir=d, z_dir=(0, 0, 1))
+    part = part - plane * Box(80, 120, (bb.max.Z + 1) - right_z)
 
     if wedge_fillet > 0:                                 # round the inside corner of the L
+        def s_of(p):
+            return (Vector(p.X, p.Y, 0) - Vector(G.X, G.Y, 0)).dot(d)
         corner = [e for e in part.edges()
                   if abs((e.position_at(0).Z + e.position_at(1).Z) / 2 - right_z) < 0.3
-                  and abs((e.position_at(0).Y + e.position_at(1).Y) / 2 - boss_top_y) < 0.3]
+                  and abs(s_of((e.position_at(0) + e.position_at(1)) * 0.5) - boss_top_s) < 0.5]
         for r in (wedge_fillet, 2.0, 1.0, 0.5):
             if not corner:
                 break
