@@ -72,6 +72,7 @@ hook_arms     = [(extrude_width - 16.0, arm_width),   # RIGHT hook: -16 mm off t
                  (arm_width / 2, arm_width)]           # LEFT hook: flush with the plate's left edge
 # Below the bottom magnet row the plate does nothing, so trim it off there.
 tail_keep     = magnet_dia / 2 + 2.0   # mm  plate kept below the bottom magnet row
+plate_corner  = 3.0        # mm  round the plate's outer corners (bottom L/R, top R)
 
 # ---- CAMERA MOUNT BRACKETS ----
 # Two arms projecting rearward off the boss/back face; the camera bolts between
@@ -314,6 +315,42 @@ def cut_right_wedge(part, wire):
     return part
 
 
+def add_plate_corners(part, wire):
+    """Round the magnet plate's outer corners (bottom-left/right, top-right)."""
+    if plate_corner <= 0:
+        return part
+    leg = _ordered_edges(wire)[-1]
+    G, H = leg.position_at(0), leg.position_at(1)
+    d = H - G
+    d = d / d.length
+    n = Vector(d.Y, -d.X, 0)
+    s_tail = max(magnet_rows) + tail_keep
+    W = extrude_width
+
+    def s_of(q):
+        return (Vector(q.X, q.Y, 0) - Vector(G.X, G.Y, 0)).dot(d)
+
+    sel = []
+    for zc, sc in ((0.0, s_tail), (W, s_tail), (W, 0.0)):   # bL, bR, topR
+        for e in part.edges():
+            t = e.position_at(1) - e.position_at(0)
+            L = t.length
+            if L < 1e-6 or abs((t.X * n.X + t.Y * n.Y) / L) <= 0.8:
+                continue            # keep only edges running across the wall (along n)
+            m = (e.position_at(0) + e.position_at(1)) * 0.5
+            if abs(m.Z - zc) < 1.5 and abs(s_of(m) - sc) < 1.5:
+                sel.append(e)
+    for r in (plate_corner, 2.5, 2.0, 1.5):
+        if not sel:
+            break
+        try:
+            part = fillet(sel, r)
+            break
+        except Exception:
+            continue
+    return part
+
+
 def add_wedge_fillet(part, wire):
     """Explicit fillet in the L-cut's re-entrant corner (OCC won't fillet it at G).
 
@@ -466,7 +503,8 @@ mount = cut_tail(mount, van)
 mount = cut_right_wedge(mount, van)
 mount = add_brackets(mount, van)
 mount = add_top_gussets(mount, van)
-mount = add_wedge_fillet(mount, van)   # last: union near the right bracket, don't perturb its fillet
+mount = add_wedge_fillet(mount, van)   # union near the right bracket, don't perturb its fillet
+mount = add_plate_corners(mount, van)
 
 if __name__ == "__main__":
     bb = mount.bounding_box()
