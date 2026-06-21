@@ -1,0 +1,14 @@
+[project]
+name = "3d-models"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "build123d>=0.11.0",
+    "ocp-vscode>=3.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.11.0",
+]
