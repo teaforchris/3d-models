@@ -49,8 +49,13 @@ magnet_depth  = 3.0        # mm  magnet thickness; pocket depth = this (flush at
 press_fit     = 0.1        # mm  pocket dia = magnet_dia - press_fit (interference)
 skin          = 0.8        # mm  van-side membrane over the magnet (~4 layers @0.2)
 back_wall     = skin + magnet_depth        # mm  G->H wall thickness (derived = 3.8)
-magnet_rows   = (11.0, 26.0)               # mm  positions along G->H, from G
-mag_edge      = (magnet_dia - press_fit) / 2 + 3.0   # 3 mm wall holding the outer magnets in
+boss_inset    = 3.0        # mm  boss starts this far down-leg from G (= its top edge)
+magnet_top_gap = 3.0       # mm  boss top edge -> top of the top magnet hole
+pocket_radius = (magnet_dia - press_fit) / 2
+row_spacing   = 15.0       # mm  spacing between the two magnet rows
+_row1         = boss_inset + magnet_top_gap + pocket_radius   # top row anchored to the boss top
+magnet_rows   = (_row1, _row1 + row_spacing)   # along G->H; whole group rides magnet_top_gap
+mag_edge      = pocket_radius + 3.0            # 3 mm wall holding the outer magnets in
 magnet_cols   = (mag_edge, extrude_width / 2, extrude_width - mag_edge)  # derived: cinch to width
 
 # ---- MATERIAL REDUCTION / HOOK ARMS ----
@@ -78,7 +83,7 @@ bolt_clear    = 20.0       # mm  M2 hole centre distance from the boss back face
 m2_clear_dia  = 2.4        # mm  M2 bolt clearance hole
 hole_wall     = 2.0        # mm  material around the hole (sets tip radius & arm width)
 bracket_base_fillet = 6.0  # mm  exaggerated base fillet, in the XY (profile) plane only
-bracket_s     = None       # mm  position along G->H from G; None = mid-boss
+bracket_s     = sum(magnet_rows) / 2   # mm  along G->H; centred on the magnet group (moves with it)
 
 
 def _ordered_edges(wire):
@@ -175,7 +180,7 @@ def add_magnets(part, wire):
     n = Vector(d.Y, -d.X, 0)                        # outward normal (into plastic/back)
 
     # Boss: raise the G->H wall from `wall` to `back_wall`, full width, ends inset.
-    inset = 3.0
+    inset = boss_inset
     lo = wall - 0.4                                 # overlap into existing wall to fuse cleanly
     centre = G + d * (Lgh / 2) + n * ((lo + back_wall) / 2)
     centre = Vector(centre.X, centre.Y, extrude_width / 2)
@@ -246,7 +251,7 @@ def cut_right_wedge(part, wire):
     d = H - G
     d = d / d.length
     right_z = max(zc + w / 2 for zc, w in hook_arms)    # right face of the rightmost arm
-    boss_top_s = 3.0                                     # boss top along the leg (matches add_magnets inset)
+    boss_top_s = boss_inset                              # boss top along the leg
 
     # Wedge = {Z > right arm's right face} AND {above the boss top, measured ALONG
     # the leg} — so the "inward" cut follows the slanted boss-top edge (no triangle).
