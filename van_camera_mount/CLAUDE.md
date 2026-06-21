@@ -42,12 +42,16 @@ long sweep; F→G the arc; G→H the back-face leg.
   throat and destroys the hook). Contact face stays the validated curve to 0.0 mm.
 - `extrude_width` — **3 mm = thin print-test slice**, set to the real mount width
   for the full part.
-- Print-test seat tweaks (override validated curve to close rests-gaps on the
-  van; both small, feel-tuned, refine by reprint):
+- Seat tweaks — **VALIDATED & LOCKED: `ef_extend=0.5`, `fg_extend=0.35`.**
+  Print-tested against the van → profile fit is now PERFECT. Treat these like the
+  SVG: do not change them without a new physical fit test.
   - `ef_extend` — lengthen E→F sweep along its tangent, carry F-G-H rigidly →
     seats F.
   - `fg_extend` — continue F-G arc along its curvature past G; G-H leg follows
     the tangent (no kink) → +ve swings H toward the door (~0.35 mm arc ≈ ~1 mm H).
+- `_offset_outward` auto-picks the offset side so the wall lands outside the curl
+  and **asserts the hook survives** (a hardcoded Side once silently filled the
+  throat after the wire rebuild and shipped a hookless print — never again).
 - Export: `mount.py --export` writes `outputs/mount_w<width>_<datestamp>.stl`.
 
 ## Open / TODO

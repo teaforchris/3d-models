@@ -24,16 +24,19 @@ OUTPUTS = HERE / "outputs"
 # ---- PARAMETERS (everything tunable lives here) ----
 wall          = 3.0        # mm  wall thickness, added to the NON-van side
 extrude_width = 3.0        # mm  mount width (Z); 3 = thin print-test slice, 50 = full
-offset_side   = Side.RIGHT # 3 mm on the OUTSIDE of the curl, keeps the hook open
+# (the offset side is auto-chosen so the wall lands OUTSIDE the curl regardless of
+#  wire winding — see _offset_outward; a hardcoded Side once silently filled the
+#  hook throat after a wire rebuild, so we pick it geometrically and assert.)
 
-# Profile tweaks (override the validated curve to close rests-gaps found on the van):
+# Profile seat tweaks. VALIDATED & LOCKED against the real van — fit is PERFECT.
+# Treat as inviolable as the SVG; do not change without a new physical fit test.
 #   ef_extend: lengthen the E->F sweep along its natural tangent, carrying the
 #              F-G-H tail rigidly -> seats point F (closes the F..mid-FE air gap).
 #   fg_extend: continue the F-G arc along its own curvature past G; the G-H leg
 #              follows the arc tangent (no kink at G) -> swings point H onto the
 #              van. +ve moves H toward the door. ~0.35 mm of arc ~= ~1 mm at H.
-ef_extend     = 0.5        # mm
-fg_extend     = 0.35       # mm
+ef_extend     = 0.5        # mm  LOCKED
+fg_extend     = 0.35       # mm  LOCKED
 
 
 def _ordered_edges(wire):
@@ -96,9 +99,27 @@ def build_contact_wire(ef_extend=ef_extend, fg_extend=fg_extend):
     return Wire(hook + [sweep, stub, arc_t, ext, leg_f])
 
 
+def _offset_outward(wire, wall):
+    """Offset `wire` into a wall-thick band on the OUTSIDE of the curl.
+
+    The correct side depends on the wire's winding (which a rebuild can flip), so
+    instead of hardcoding Side.LEFT/RIGHT we build both and keep the one that adds
+    material above the curl crown — i.e. keeps the hook throat open. Asserts the
+    hook survived so a wrong-side offset can never silently ship to a print again.
+    """
+    crown = max(v.Y for v in wire.vertices())            # top of the rolled-lip curl
+    faces = [make_face(offset(wire, amount=wall, side=s, closed=True))
+             for s in (Side.LEFT, Side.RIGHT)]
+    outward = max(faces, key=lambda f: f.bounding_box().max.Y)
+    clearance = outward.bounding_box().max.Y - crown
+    assert clearance > 0.5 * wall, (
+        f"offset collapsed the hook: wall only {clearance:.2f} mm above the curl "
+        f"crown (expected ~{wall:.1f}). Both sides filled the throat?")
+    return outward
+
+
 van = build_contact_wire()
-band = offset(van, amount=wall, side=offset_side, closed=True)
-section = make_face(band)
+section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 
 if __name__ == "__main__":
