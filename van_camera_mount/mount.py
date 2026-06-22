@@ -57,6 +57,10 @@ _row1         = boss_inset + magnet_top_gap + pocket_radius   # top row anchored
 magnet_rows   = (_row1, _row1 + row_spacing)   # along G->H; whole group rides magnet_top_gap
 mag_edge      = pocket_radius + 3.0            # 3 mm wall holding the outer magnets in
 magnet_cols   = (mag_edge, extrude_width / 2, extrude_width - mag_edge)  # derived: cinch to width
+# Extra magnets in the hook (over the door's rolled top), recessed from the outer
+# up-facing side to pull the top down. Rows are fractions along the E->F sweep.
+hook_magnet_rows = (0.1, 0.5, 0.85)         # fractions along the sweep (E=0 .. F=1)
+hook_magnet_cols = (6.0, 16.0, 26.0)        # mm  Z across the solid hook
 
 # ---- MATERIAL REDUCTION / HOOK ARMS ----
 # The hook only locates on the door lip, so it needn't be full width OR at the
@@ -76,9 +80,9 @@ plate_corner  = 3.0        # mm  round the plate's outer corners (bottom L/R, to
 
 # ---- CAMERA MOUNT BRACKETS ----
 # Two arms projecting rearward off the boss/back face; the camera bolts between
-# them with an M2 bolt (axis along the width). Spec: 13 mm inner gap, 3 mm thick
+# them with an M2 bolt (axis along the width). Spec: 14 mm inner gap, 3 mm thick
 # arms, hole centres 20 mm clear of the boss back face.
-bracket_gap   = 13.0       # mm  inner distance between the two arms (camera width)
+bracket_gap   = 14.0       # mm  inner distance between the two arms (camera width)
 bracket_thick = 3.0        # mm  arm thickness (along width Z)
 bolt_clear    = 20.0       # mm  M2 hole centre distance from the boss back face
 m2_clear_dia  = 2.4        # mm  M2 bolt clearance hole
@@ -250,6 +254,25 @@ def add_outer_taper(part, wire):
                       Spline(*outer), Line(outer[0], inner[0])])
     shell = extrude(face, amount=extrude_width)
     return (part + shell.translate((0, 0, -shell.bounding_box().min.Z))).clean()
+
+
+def add_hook_magnets(part, wire):
+    """Recess magnets into the hook (over the door's rolled top), from the outer
+    up-facing side, blind toward the contact face — pulls the top down."""
+    sweep = max(_ordered_edges(wire), key=lambda e: e.length)
+    r = (magnet_dia - press_fit) / 2
+    over = 0.6
+    pcd = skin + (magnet_depth + over) / 2
+    for u in hook_magnet_rows:
+        p = sweep.position_at(u)
+        tg = sweep.tangent_at(u)
+        rn = Vector(tg.Y, -tg.X, 0)                 # outward (non-van) normal
+        for z in hook_magnet_cols:
+            c = p + rn * pcd
+            c = Vector(c.X, c.Y, z)
+            part = part - Plane(origin=c, z_dir=rn) * Cylinder(
+                radius=r, height=magnet_depth + over)
+    return part
 
 
 def cut_arms(part, wire):
@@ -498,6 +521,7 @@ section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 mount = add_magnets(mount, van)
 mount = cut_arms(mount, van)
+mount = add_hook_magnets(mount, van)
 mount = cut_tail(mount, van)
 mount = cut_right_wedge(mount, van)
 mount = add_brackets(mount, van)
