@@ -22,7 +22,7 @@ SVG = HERE / "sources" / "door_profile.svg"
 OUTPUTS = HERE / "outputs"
 
 # ---- PARAMETERS (everything tunable lives here) ----
-wall          = 3.0        # mm  wall thickness, added to the NON-van side
+wall          = 3.8        # mm  wall thickness (NON-van side); uniform = back_wall for strength
 extrude_width = 45.0       # mm  baseplate width (Z). DATUM = the RIGHT edge (max Z =
                            #     the door edge); fit measurements run negative leftward.
 # (the offset side is auto-chosen so the wall lands OUTSIDE the curl regardless of
@@ -253,10 +253,11 @@ def add_outer_taper(part, wire):
 
 
 def cut_arms(part, wire):
-    """Above F, keep only the `hook_arms` bands; remove everything else.
+    """Above F, keep ONE solid hook band spanning the listed arms; cut the rest.
 
-    The lower FG arc + GH plate stays full width; above the F bend only the listed
-    hook arms survive, at whatever Z positions seat cleanly on the door lip.
+    The hook is solid from the leftmost arm's edge to the rightmost arm's edge
+    (for holding strength), with everything beyond the right arm still removed for
+    tail-light clearance. The lower FG arc + GH plate stays full width.
     """
     sweep = max(_ordered_edges(wire), key=lambda e: e.length)   # the long E->F sweep
     cut_y = min(sweep.position_at(0).Y, sweep.position_at(1).Y)  # F = its lower end
@@ -265,15 +266,14 @@ def cut_arms(part, wire):
     cy = (cut_y + bb.max.Y + 1) / 2
     dx, dy = bb.size.X + 2, (bb.max.Y + 1) - cut_y
     above = Pos(cx, cy, extrude_width / 2) * Box(dx, dy, extrude_width + 4)
-    bands = None
-    for zc, w in hook_arms:
-        band = Pos(cx, cy, zc) * Box(dx, dy, w)
-        bands = band if bands is None else bands + band
-    part = part - (above - bands)                # remove above-F material outside the bands
+    left = min(zc - w / 2 for zc, w in hook_arms)               # solid across the arms' span
+    right = max(zc + w / 2 for zc, w in hook_arms)
+    band = Pos(cx, cy, (left + right) / 2) * Box(dx, dy, right - left)
+    part = part - (above - band)                 # remove above-F material outside the span
 
-    # Fillet each hook-arm root edge (Y=cut_y, at the band's two Z boundaries).
+    # Fillet the solid hook's root edges (Y=cut_y, at its two Z boundaries).
     if arm_fillet > 0:
-        edges_z = [zc + sign * w / 2 for zc, w in hook_arms for sign in (-1, 1)]
+        edges_z = [left, right]
         def midz(e):
             return (e.position_at(0).Z + e.position_at(1).Z) / 2
         roots = [e for e in part.edges()
@@ -497,7 +497,6 @@ van = build_contact_wire()
 section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 mount = add_magnets(mount, van)
-mount = add_outer_taper(mount, van)
 mount = cut_arms(mount, van)
 mount = cut_tail(mount, van)
 mount = cut_right_wedge(mount, van)
