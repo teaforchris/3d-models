@@ -61,6 +61,14 @@ magnet_cols   = (mag_edge, extrude_width / 2, extrude_width - mag_edge)  # deriv
 # up-facing side to pull the top down. Rows are fractions along the E->F sweep.
 hook_magnet_rows = (0.1, 0.5, 0.85)         # fractions along the sweep (E=0 .. F=1)
 hook_magnet_cols = (6.0, 16.0, 26.0)        # mm  Z across the solid hook
+# Extend the hook tip further under the lip: continue the B->A line past A, tapering
+# the outer thickness down to grip in the gap under the rolled lip.
+hook_ext_len  = 12.0       # mm  how far past A the tip continues
+curl_shave    = 0.0        # mm  shave the curl outer (E..A) down by this (3.8 -> 3.0) so the
+curl_shave_margin = 6.0    #     proud tip ridge can't catch the rubber lip (0 = off; buggy mask)
+hook_ext_base = wall - curl_shave   # mm  outer thickness where the extension meets A (= shaved)
+hook_ext_tip  = 2.0        # mm  outer thickness at the new tip
+hook_ext_blend = 1.5       # mm  fillet the hook-outer -> tongue-taper crease (smooth underside)
 
 # ---- MATERIAL REDUCTION / HOOK ARMS ----
 # The hook only locates on the door lip, so it needn't be full width OR at the
@@ -254,6 +262,71 @@ def add_outer_taper(part, wire):
                       Spline(*outer), Line(outer[0], inner[0])])
     shell = extrude(face, amount=extrude_width)
     return (part + shell.translate((0, 0, -shell.bounding_box().min.Z))).clean()
+
+
+def add_curl_shave(part, wire):
+    """Shave the proud outer of the hook curl (E..A) from `wall` to wall-curl_shave,
+    so the tip ridge can't catch the rubber lip. Done by subtracting the outer
+    shell (the gap between a thin and full offset) over the curl region — both
+    offsets are build123d so the tight curl stays valid."""
+    if curl_shave <= 0:
+        return part
+    shell = _offset_outward(wire, wall) - _offset_outward(wire, wall - curl_shave)
+    edges = _ordered_edges(wire)
+    pts = [edges[i].position_at(u) for i in range(4) for u in (0, 0.5, 1)]
+    xs, ys = [p.X for p in pts], [p.Y for p in pts]
+    m = curl_shave_margin
+    mask = Pos((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2) * Rectangle(
+        max(xs) - min(xs) + m, max(ys) - min(ys) + m)
+    hw = max(zc + w / 2 for zc, w in hook_arms) - min(zc - w / 2 for zc, w in hook_arms)
+    z0 = min(zc - w / 2 for zc, w in hook_arms)
+    cutter = extrude(shell & mask, amount=hw)
+    cutter = cutter.translate((0, 0, z0 - cutter.bounding_box().min.Z))
+    return (part - cutter).clean()
+
+
+def add_hook_extension(part, wire):
+    """Continue the hook tip (B->A line) further under the lip, tapering thinner.
+
+    A straight tapered tongue (the tight curl can't be re-offset by hand, but this
+    extension is straight so it's robust); spans the solid hook width.
+    """
+    edges = _ordered_edges(wire)
+    A, B = edges[0].position_at(0), edges[0].position_at(1)
+    d = A - B
+    d = d / d.length                                # B->A direction, continued past A
+    rn = Vector(d.Y, -d.X, 0)
+    if not part.is_inside(Vector((A + rn).X, (A + rn).Y, extrude_width / 2)):
+        rn = -rn                                    # outward (into plastic) side
+    new_tip = A + d * hook_ext_len
+    # Start exactly at A (tangent continuation of the hook) so the underside stays
+    # smooth — no contact-side overlap to crease it. Outer corner at A's outer tip.
+    pts = [A, new_tip, new_tip + rn * hook_ext_tip, A + rn * hook_ext_base]
+    face = make_face(Polygon(*[(q.X, q.Y) for q in pts]))
+    hw = max(zc + w / 2 for zc, w in hook_arms) - min(zc - w / 2 for zc, w in hook_arms)
+    z0 = min(zc - w / 2 for zc, w in hook_arms)
+    tongue = extrude(face, amount=hw)
+    tongue = tongue.translate((0, 0, z0 - tongue.bounding_box().min.Z))
+    part = (part + tongue).clean()
+
+    # Blend the crease where the hook's full-thickness outer meets the tongue taper.
+    if hook_ext_blend > 0:
+        corner = A + rn * hook_ext_base
+        def near_xy(e):
+            m = (e.position_at(0) + e.position_at(1)) * 0.5
+            return math.hypot(m.X - corner.X, m.Y - corner.Y) < 1.0
+        edge = [e for e in part.edges()
+                if abs((e.position_at(1) - e.position_at(0)).Z) > 0.9 * e.length
+                and near_xy(e)]
+        for r in (hook_ext_blend, 1.0, 0.6, 0.3):
+            if not edge:
+                break
+            try:
+                part = fillet(edge, r)
+                break
+            except Exception:
+                continue
+    return part
 
 
 def add_hook_magnets(part, wire):
@@ -521,6 +594,8 @@ section = _offset_outward(van, wall)
 mount = extrude(section, amount=extrude_width)
 mount = add_magnets(mount, van)
 mount = cut_arms(mount, van)
+mount = add_curl_shave(mount, van)
+mount = add_hook_extension(mount, van)
 mount = add_hook_magnets(mount, van)
 mount = cut_tail(mount, van)
 mount = cut_right_wedge(mount, van)
