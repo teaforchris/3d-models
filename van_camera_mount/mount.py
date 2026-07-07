@@ -50,17 +50,24 @@ press_fit     = 0.1        # mm  pocket dia = magnet_dia - press_fit (interferen
 skin          = 0.8        # mm  van-side membrane over the magnet (~4 layers @0.2)
 back_wall     = skin + magnet_depth        # mm  G->H wall thickness (derived = 3.8)
 boss_inset    = 0.0        # mm  boss top at G (as high as the leg goes before the curve)
-magnet_top_gap = 3.0       # mm  boss top edge -> top of the top magnet hole
+magnet_top_gap = 3.5       # mm  boss top edge -> top of the top magnet hole (3.5 = same
+                           #     border as the L/R edge walls)
 pocket_radius = (magnet_dia - press_fit) / 2
-row_spacing   = 15.0       # mm  spacing between the two magnet rows
+row_spacing   = 12.55      # mm  spacing between the two magnet rows (set so the bottom row
+                           #     sits 4 mm off the free bottom edge; tail_keep holds the
+                           #     plate outline fixed)
 _row1         = boss_inset + magnet_top_gap + pocket_radius   # top row anchored to the boss top
 magnet_rows   = (_row1, _row1 + row_spacing)   # along G->H; whole group rides magnet_top_gap
-mag_edge      = pocket_radius + 3.0            # 3 mm wall holding the outer magnets in
-magnet_cols   = (mag_edge, extrude_width / 2, extrude_width - mag_edge)  # derived: cinch to width
+mag_edge      = pocket_radius + 3.5            # 3.5 mm wall holding the outer magnets in
+# Columns across the width, EVEN (aligned rows). Top row: 3 across, outer magnets a
+# 3 mm wall off each edge. Bottom row: only 2, centred under the two camera brackets
+# (bracket_z_centres, defined with the bracket params below) so the pull is right
+# where the load is. magnet_col_rows is assembled after the bracket params.
+magnet_cols_top = (mag_edge, extrude_width / 2, extrude_width - mag_edge)
 # Extra magnets in the hook (over the door's rolled top), recessed from the outer
 # up-facing side to pull the top down. Rows are fractions along the E->F sweep.
-hook_magnet_rows = (0.1, 0.5, 0.85)         # fractions along the sweep (E=0 .. F=1)
-hook_magnet_cols = (6.0, 16.0, 26.0)        # mm  Z across the solid hook
+hook_magnet_rows = (0.1, 0.35, 0.6, 0.85)   # 4 rows, even fractions along the sweep (E=0 .. F=1)
+# hook_magnet_cols is derived from the solid-hook Z band (needs hook_arms) — see below.
 # Extend the hook tip further under the lip: continue the B->A line past A, tapering
 # the outer thickness down to grip in the gap under the rolled lip.
 hook_ext_len  = 12.0       # mm  how far past A the tip continues
@@ -82,8 +89,16 @@ arm_fillet    = 1.5        # mm  fillet at each arm root (relieves the stress ri
 wedge_fillet  = 3.0        # mm  fillet on the inside corner of that L-cut
 hook_arms     = [(extrude_width - 16.0, arm_width),   # RIGHT hook: -16 mm off the door edge
                  (arm_width / 2, arm_width)]           # LEFT hook: flush with the plate's left edge
+# Hook magnet columns: 2 across the solid-hook Z band, a 4 mm wall off each band edge.
+_hook_zlo     = min(zc - w / 2 for zc, w in hook_arms)   # solid hook left edge  (=0)
+_hook_zhi     = max(zc + w / 2 for zc, w in hook_arms)   # solid hook right edge (=31.5)
+hook_mag_edge = 4.0        # mm  wall from a hook pocket edge to the band edge
+hook_magnet_cols = (_hook_zlo + hook_mag_edge + pocket_radius,
+                    _hook_zhi - hook_mag_edge - pocket_radius)
 # Below the bottom magnet row the plate does nothing, so trim it off there.
-tail_keep     = magnet_dia / 2 + 2.0   # mm  plate kept below the bottom magnet row
+tail_keep     = magnet_dia / 2 + 3.95  # mm  plate kept below the bottom magnet row
+                                       # (gives a 4 mm wall from the bottom pocket edge to
+                                       #  the free bottom edge; holds the same plate outline)
 plate_corner  = 3.0        # mm  round the plate's outer corners (bottom L/R, top R)
 
 # ---- CAMERA MOUNT BRACKETS ----
@@ -98,6 +113,14 @@ hole_wall     = 2.0        # mm  material around the hole (sets tip radius & arm
 bracket_base_fillet = 6.0  # mm  exaggerated base fillet, in the XY (profile) plane only
 bracket_tip_r = m2_clear_dia / 2 + hole_wall    # tongue tip radius (2 mm wall around the hole)
 bracket_s     = boss_inset + bracket_tip_r      # mm  along G->H: top face flush with the boss top (G)
+# Z centres of the two bracket arms (right arm flush to the right hook band, left one
+# gap+thick inboard). Single source of truth: brackets, gussets AND the bottom magnet
+# row all read this, so the magnets stay centred under the arms.
+_brk_right    = max(zc + w / 2 for zc, w in hook_arms) - bracket_thick / 2
+bracket_z_centres = (_brk_right - (bracket_gap + bracket_thick), _brk_right)
+# Bottom magnet row = 2 magnets, one under each bracket (well clear of both edges).
+magnet_cols_bot = bracket_z_centres
+magnet_col_rows = (magnet_cols_top, magnet_cols_bot)   # per-row columns (top: 3, bottom: 2)
 # Top gusset (tension side): a buttress sweeping from the bracket up into the arc,
 # since the flush top has no edge to fillet. Tunable shape:
 gusset_reach  = bracket_base_fillet   # mm  reach OUT along the bracket = the bottom fillet radius
@@ -214,8 +237,8 @@ def add_magnets(part, wire):
     over = 0.6                                      # break cleanly through the back face
     pcd = skin + (magnet_depth + over) / 2          # pocket centre dist from van face
     r = (magnet_dia - press_fit) / 2
-    for s in magnet_rows:
-        for z in magnet_cols:
+    for s, cols in zip(magnet_rows, magnet_col_rows):
+        for z in cols:
             c = G + d * s + n * pcd
             c = Vector(c.X, c.Y, z)
             part = part - Plane(origin=c, z_dir=n) * Cylinder(radius=r,
@@ -336,15 +359,23 @@ def add_hook_magnets(part, wire):
     r = (magnet_dia - press_fit) / 2
     over = 0.6
     pcd = skin + (magnet_depth + over) / 2
-    for u in hook_magnet_rows:
+    def drill(u, z):
         p = sweep.position_at(u)
         tg = sweep.tangent_at(u)
         rn = Vector(tg.Y, -tg.X, 0)                 # outward (non-van) normal
+        c = p + rn * pcd
+        c = Vector(c.X, c.Y, z)
+        return part - Plane(origin=c, z_dir=rn) * Cylinder(
+            radius=r, height=magnet_depth + over)
+
+    for u in hook_magnet_rows:
         for z in hook_magnet_cols:
-            c = p + rn * pcd
-            c = Vector(c.X, c.Y, z)
-            part = part - Plane(origin=c, z_dir=rn) * Cylinder(
-                radius=r, height=magnet_depth + over)
+            part = drill(u, z)
+    # Plus a centre magnet in each 2x2 block (the "5" on a dice, repeated): one per
+    # adjacent row-pair, at the mid-fraction and mid-Z between the two columns.
+    z_mid = sum(hook_magnet_cols) / len(hook_magnet_cols)
+    for u0, u1 in zip(hook_magnet_rows, hook_magnet_rows[1:]):
+        part = drill((u0 + u1) / 2, z_mid)
     return part
 
 
@@ -505,9 +536,7 @@ def add_brackets(part, wire):
     root_n = wall - 1.0                              # embed into the wall so it fuses
     # Anchor the pair so the right bracket's outer face is flush with the right
     # arm's right edge (no overhang past the mount edge), camera centreline follows.
-    right_edge = max(zc + w / 2 for zc, w in hook_arms)
-    z_right = right_edge - bracket_thick / 2
-    z_centres = (z_right - (bracket_gap + bracket_thick), z_right)
+    z_centres = bracket_z_centres
     for zc in z_centres:
         part = part + _bracket_arm(base, d, n, zc, hole_n, tip_r, root_n)
 
@@ -572,9 +601,7 @@ def add_top_gussets(part, wire):
     d = H - G
     d = d / d.length
     n = Vector(d.Y, -d.X, 0)
-    right_edge = max(zc + w / 2 for zc, w in hook_arms)
-    z_right = right_edge - bracket_thick / 2
-    z_centres = (z_right - (bracket_gap + bracket_thick), z_right)
+    z_centres = bracket_z_centres
     Pc = G + n * gusset_embed                       # sunk into the wall at s=0
     Pb = G + n * (back_wall + gusset_reach)         # out along the bracket top
     Pw = G - d * gusset_rise + n * gusset_embed     # sunk into the wall, up the arc above G
